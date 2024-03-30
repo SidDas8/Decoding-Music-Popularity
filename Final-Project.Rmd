@@ -1,0 +1,346 @@
+---
+title: "Data Preprocessing, Ridge & Lasso Regression"
+author: "Siddharth Das, Summer Mohammad, Sakura Garica, Diego Martinez"
+date: "3/18/24"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+# Professor Nina Dörnemann
+
+## Data Preprocessing
+
+```{r}
+# Read CSV data
+spotify <- read.csv("spotify-2023.csv")
+
+head(spotify)
+```
+
+```{r}
+# Check column names
+names(spotify)
+```
+
+```{r}
+# Update column names for simplicity
+
+# Update 2nd column name
+names(spotify)[2] <- "artist_names"
+
+# Update the names of the 18th to 24th columns
+names(spotify)[18:24] <- c("danceability", "valence", "energy", "acousticness", "instrumentalness", "liveness", "speechiness")
+
+# Check new column names
+names(spotify)
+```
+
+```{r, warning = FALSE}
+# Display unique values in each column of dataframe to understand data cleaning necessities
+# unique_values <- lapply(spotify, unique)
+# print(unique_values)
+
+# Remove row corresponding to incorrect stream value
+spotify <- spotify[-575,]
+
+# Remove rows where column key consists of empty string
+spotify <- spotify[spotify$key != "", , drop = FALSE]
+
+# Remove commas and convert 3 columns to integer
+spotify$in_deezer_playlists <- as.integer(gsub(",", "", spotify$in_deezer_playlists))
+spotify$in_shazam_charts <- as.integer(gsub(",", "", spotify$in_shazam_charts))
+spotify$streams <- as.integer(spotify$streams)
+
+# Remove rows with NA values
+spotify <- na.omit(spotify)
+
+# Remove duplicate rows
+spotify <- unique(spotify)
+```
+
+Before data cleaning, we had 953 rows.
+
+After data cleaning, we have 799 rows.
+
+```{r}
+# Export cleaned CSV data set for group members to use
+write.csv(spotify, file = "cleaned_spotify_data.csv", row.names = FALSE)
+```
+
+## Ridge & Lasso Data Preparation
+
+```{r}
+# Check column names
+names(spotify)
+```
+
+## We already implemented Ridge and LASSO Regression utilizing only the 10 audio attributes to predict the total number of streams on Spotify. We observed that all 10 audio attributes were statistically insignificant in predicting streams. As a result, we will only demonstrate the code that includes the in_spotify_playlists to avoid unnecessary repetition.
+
+
+```{r}
+# Define subset of variables for Ridge & Lasso Regression
+columns_subset <- c(9, 7, 15:24)
+
+# Create data frame for Ridge & Lasso Regression
+spotify <- spotify[, columns_subset]
+
+# Confirm correct subset of variables
+names(spotify)
+```
+```{r}
+# Feature correlation plot
+library(corrplot)
+corrplot(cor(spotify[,-c(4:5)]), tl.col = "black", method = "number")
+title("Feature Correlation Plot")
+library(ggplot2)
+ggplot(spotify, aes(x = in_spotify_playlists, y = streams)) +
+  geom_point() +
+  labs(x = "Playlist Inclusions", y = "Streams", title = "Streams by Playlist Inclusions (r = 0.77)")
+
+ggplot(spotify, aes(x = acousticness, y = energy)) +
+  geom_point() +
+  labs(x = "Acousticness", y = "Energy", title = "Energy by Acousticness (r = -0.55)")
+```
+
+
+```{r}
+# Check if scaling is needed.
+summary(spotify)
+```
+Indeed, scaling is necessary as variables are not already on the same scales. In other words, the distributions of the quantitative variables significantly differ. If the varying scales are not addressed, our ML model predictions may result in lower accuracy.
+
+
+
+```{r}
+# Define subset of quantitative variables for scaling
+columns_scale <- c(1, 2, 3, 6:12)
+
+# Scale selected columns
+spotify[, columns_scale] <- scale(spotify[, columns_scale])
+
+# Confirm successful scaling process
+summary(spotify)
+```
+
+### Split the Spotify data into the training and testing sets.
+
+```{r}
+# Create design matrix without intercept column
+x <- model.matrix(streams ~ ., spotify)[, -1]
+
+# Define response variable
+y <- spotify$streams
+
+# Set seed to reproduce results
+set.seed(2023)
+
+# Randomly split the data in half
+train <- sample(1:nrow(x), nrow(x) / 2)
+
+# Indices for testing data
+test <- (-train)
+
+# Define testing data
+y.test <- y[test]
+```
+
+To predict if Ridge Regression or Lasso Regression would fit the data better, the MSE test error will be calculated for Ridge Regression and Lasso Regression.
+
+## Ridge Regression
+
+```{r, message = FALSE}
+# Load necessary package for ridge regression
+library(glmnet)
+
+# Perform ten-fold cross-validation for ridge regression
+cv.out <- cv.glmnet(x[train, ], y[train], alpha = 0)
+
+# Choose λ by cross-validation
+bestlam <- cv.out$lambda.min
+
+# Fit ridge regression model on training set with λ chosen by cross-validation
+## alpha = 0 for ridge regression
+ridge.mod <- glmnet(x[train, ], y[train], alpha = 0, lambda = bestlam)
+
+# Prediction for the test set utilizing λ chosen by cross-validation
+ridge.pred <- predict(ridge.mod, s = bestlam, newx = x[test, ])
+
+# Obtain MSE for test set (test error)
+mse <- mean((ridge.pred - y.test)^2)
+
+# Obtain coefficient estimates
+ridge.coef <- predict(ridge.mod, type = "coefficients", s = bestlam)
+
+# Report λ by cross-validation
+print(paste("The λ chosen by cross-validation is:", bestlam))
+
+# Report test error
+print(paste("The Mean Squared Error for the test set is:", mse))
+
+ridge.coef
+```
+
+
+
+## Lasso Regression
+
+```{r}
+# Perform ten-fold cross-validation for lasso regression
+cv.out <- cv.glmnet(x[train, ], y[train], alpha = 1)
+
+# Choose λ by cross-validation
+bestlam <- cv.out$lambda.min
+
+# Fit lasso regression model on training set with λ chosen by cross-validation
+## alpha = 1 for lasso regression
+lasso.mod <- glmnet(x[train, ], y[train], alpha = 1, lambda = bestlam)
+
+# Prediction for the test set utilizing λ chosen by cross-validation
+lasso.pred <- predict(lasso.mod, s = bestlam, newx = x[test, ])
+
+# Obtain MSE for test set (test error)
+mse <- mean((lasso.pred - y.test)^2)
+
+# Obtain coefficient estimates
+lasso.coef <- predict(lasso.mod, type = "coefficients", s = bestlam)
+
+# Obtain number of non-zero coefficient estimates
+non_zero_estimates <- length(lasso.coef[lasso.coef != 0])
+
+# Report λ by cross-validation
+print(paste("The λ chosen by cross-validation is:", bestlam))
+
+# Report test error
+print(paste("The Mean Squared Error for the test set is:", mse))
+
+# Report # of non-zero coefficient estimates, including intercept
+print(paste("The number of non-zero coefficient estimates, including the intercept, is:", non_zero_estimates))
+
+# Report # of non-zero coefficient estimates, excluding intercept
+print(paste("The number of non-zero coefficient estimates, excluding the intercept, is:", non_zero_estimates - 1))
+
+lasso.coef
+```
+
+
+
+## Reattempt both regression methods without Key column
+
+```{r}
+names(spotify)
+```
+
+```{r}
+# Define subset of variables for Ridge & Lasso Regression
+columns_subset <- c(1:3, 5:12)
+
+# Create data frame for Ridge & Lasso Regression
+spotify <- spotify[, columns_subset]
+
+# Confirm correct subset of variables
+names(spotify)
+```
+
+### Split the Spotify data into the training and testing sets.
+
+```{r}
+# Create design matrix without intercept column
+x <- model.matrix(streams ~ ., spotify)[, -1]
+
+# Define response variable
+y <- spotify$streams
+
+# Set seed to reproduce results
+set.seed(2023)
+
+# Randomly split the data in half
+train <- sample(1:nrow(x), nrow(x) / 2)
+
+# Indices for testing data
+test <- (-train)
+
+# Define testing data
+y.test <- y[test]
+```
+
+## Ridge Regression
+
+```{r, message = FALSE}
+# Load necessary package for ridge regression
+library(glmnet)
+
+# Perform ten-fold cross-validation for ridge regression
+cv.out <- cv.glmnet(x[train, ], y[train], alpha = 0)
+
+# Choose λ by cross-validation
+bestlam <- cv.out$lambda.min
+
+# Fit ridge regression model on training set with λ chosen by cross-validation
+## alpha = 0 for ridge regression
+ridge.mod <- glmnet(x[train, ], y[train], alpha = 0, lambda = bestlam)
+
+# Prediction for the test set utilizing λ chosen by cross-validation
+ridge.pred <- predict(ridge.mod, s = bestlam, newx = x[test, ])
+
+# Obtain R^2
+ridge.r.sq = cor(ridge.pred, y[test])^2
+
+# Obtain MSE for test set (test error)
+mse <- mean((ridge.pred - y.test)^2)
+
+# Obtain coefficient estimates
+ridge.coef <- predict(ridge.mod, type = "coefficients", s = bestlam)
+
+# Report λ by cross-validation
+print(paste("The λ chosen by cross-validation is:", bestlam))
+
+# Report test error
+print(paste("The Mean Squared Error for the test set is:", mse))
+
+ridge.coef
+```
+
+
+## Lasso Regression
+
+```{r}
+# Perform ten-fold cross-validation for lasso regression
+cv.out <- cv.glmnet(x[train, ], y[train], alpha = 1)
+
+# Choose λ by cross-validation
+bestlam <- cv.out$lambda.min
+
+# Fit lasso regression model on training set with λ chosen by cross-validation
+## alpha = 1 for lasso regression
+lasso.mod <- glmnet(x[train, ], y[train], alpha = 1, lambda = bestlam)
+
+# Prediction for the test set utilizing λ chosen by cross-validation
+lasso.pred <- predict(lasso.mod, s = bestlam, newx = x[test, ])
+
+# Obtain R^2
+lasso.r.sq = cor(lasso.pred, y[test])^2
+
+# Obtain MSE for test set (test error)
+mse <- mean((lasso.pred - y.test)^2)
+
+# Obtain coefficient estimates
+lasso.coef <- predict(lasso.mod, type = "coefficients", s = bestlam)
+
+# Obtain number of non-zero coefficient estimates
+non_zero_estimates <- length(lasso.coef[lasso.coef != 0])
+
+# Report λ by cross-validation
+print(paste("The λ chosen by cross-validation is:", bestlam))
+
+# Report test error
+print(paste("The Mean Squared Error for the test set is:", mse))
+
+# Report # of non-zero coefficient estimates, including intercept
+print(paste("The number of non-zero coefficient estimates, including the intercept, is:", non_zero_estimates))
+
+# Report # of non-zero coefficient estimates, excluding intercept
+print(paste("The number of non-zero coefficient estimates, excluding the intercept, is:", non_zero_estimates - 1))
+
+lasso.coef
+```
